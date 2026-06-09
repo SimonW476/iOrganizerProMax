@@ -1,12 +1,15 @@
 package com.library.ui.views;
 
+import com.library.backend.entities.BoardColumn;
 import com.library.backend.entities.Task;
 import com.library.backend.service.TaskService;
+import com.library.ui.layouts.MainLayout;
 import com.vaadin.flow.component.Component;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.combobox.ComboBox;
 import com.vaadin.flow.component.datepicker.DatePicker;
+import com.vaadin.flow.component.dialog.Dialog;
 import com.vaadin.flow.component.dnd.DragSource;
 import com.vaadin.flow.component.dnd.DropTarget;
 import com.vaadin.flow.component.html.Div;
@@ -24,7 +27,6 @@ import jakarta.annotation.security.PermitAll;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
-import com.library.ui.layouts.MainLayout;
 
 @Route(value = "", layout = MainLayout.class)
 @PageTitle("My Tasks | ClearList")
@@ -32,10 +34,9 @@ import com.library.ui.layouts.MainLayout;
 public class TaskView extends VerticalLayout {
 
     private final TaskService taskService;
-    private TaskCard lastDroppedCard = null; // Prevents "double dropping" glitches
+    private TaskCard lastDroppedCard = null;
 
-    private final VerticalLayout todoColumn = new VerticalLayout();
-    private final VerticalLayout doneColumn = new VerticalLayout();
+    private final HorizontalLayout boardLayout = new HorizontalLayout();
 
     private final TextField titleField = new TextField("Task Title");
     private final DatePicker datePicker = new DatePicker("Due Date");
@@ -61,21 +62,15 @@ public class TaskView extends VerticalLayout {
         filterLayout.setDefaultVerticalComponentAlignment(Alignment.BASELINE);
         filterLayout.getStyle().set("margin-top", "20px").set("padding", "10px").set("background-color", "#f9fafb").set("border-radius", "8px");
 
-        HorizontalLayout boardLayout = new HorizontalLayout();
         boardLayout.setSizeFull();
         boardLayout.setSpacing(true);
-
-        configureColumn(todoColumn, "To Do", false);
-        configureColumn(doneColumn, "Done", true);
-
-        boardLayout.add(todoColumn, doneColumn);
+        boardLayout.getStyle().set("overflow-x", "auto").set("padding-bottom", "20px");
 
         add(formLayout, filterLayout, boardLayout);
 
         refreshBoard();
     }
 
-    // Custom UI Component that holds a direct reference to the database Task
     private static class TaskCard extends Div {
         private final Task task;
         public TaskCard(Task task) { this.task = task; }
@@ -108,31 +103,51 @@ public class TaskView extends VerticalLayout {
         });
     }
 
-    private void configureColumn(VerticalLayout column, String title, boolean isCompletedColumn) {
-        column.setWidth("50%");
-        column.setHeightFull();
-        column.getStyle().set("min-height", "60vh").set("background-color", "#f4f5f7").set("border-radius", "8px").set("padding", "16px");
+    private VerticalLayout createColumnLayout(BoardColumn col) {
+        VerticalLayout columnWrapper = new VerticalLayout();
+        columnWrapper.setWidth("350px");
+        columnWrapper.setMinWidth("350px"); // Prevents squishing when you add lots of columns
+        columnWrapper.setHeightFull();
+        columnWrapper.getStyle().set("min-height", "60vh").set("background-color", "#f4f5f7").set("border-radius", "8px").set("padding", "16px");
 
-        H3 columnHeader = new H3(title);
-        columnHeader.getStyle().set("margin-top", "0");
-        column.add(columnHeader);
+        HorizontalLayout header = new HorizontalLayout();
+        header.setWidthFull();
+        header.setJustifyContentMode(JustifyContentMode.BETWEEN);
+        header.setDefaultVerticalComponentAlignment(Alignment.CENTER);
 
-        DropTarget<VerticalLayout> dropTarget = DropTarget.create(column);
+        H3 title = new H3(col.getTitle());
+        title.getStyle().set("margin", "0");
+
+        Button leftBtn = new Button("←", e -> moveColumn(col, -1));
+        leftBtn.addThemeVariants(ButtonVariant.LUMO_TERTIARY_INLINE);
+        Button rightBtn = new Button("→", e -> moveColumn(col, 1));
+        rightBtn.addThemeVariants(ButtonVariant.LUMO_TERTIARY_INLINE);
+        Button delBtn = new Button("✖", e -> {
+            taskService.deleteColumn(col);
+            refreshBoard();
+        });
+        delBtn.addThemeVariants(ButtonVariant.LUMO_TERTIARY_INLINE, ButtonVariant.LUMO_ERROR);
+
+        HorizontalLayout controls = new HorizontalLayout(leftBtn, rightBtn, delBtn);
+        header.add(title, controls);
+        columnWrapper.add(header);
+
+        DropTarget<VerticalLayout> dropTarget = DropTarget.create(columnWrapper);
         dropTarget.setDropEffect(com.vaadin.flow.component.dnd.DropEffect.MOVE);
-
-        // Handles dropping a card into the empty space at the bottom of a column
         dropTarget.addDropListener(event -> {
             event.getDragSourceComponent().ifPresent(draggedComponent -> {
                 if (draggedComponent instanceof TaskCard draggedCard) {
-                    if (lastDroppedCard == draggedCard) return; // Prevent double firing if dropped on a card
+                    if (lastDroppedCard == draggedCard) return;
 
                     Task task = draggedCard.getTask();
-                    task.setCompleted(isCompletedColumn);
-                    column.add(draggedCard); // Appends to the very bottom
-                    recalculateAndSavePositions();
+                    task.setBoardColumn(col);
+                    columnWrapper.add(draggedCard);
+                    recalculateAndSavePositions(col, columnWrapper);
                 }
             });
         });
+
+        return columnWrapper;
     }
 
     private TaskCard createTaskCard(Task task) {
@@ -172,28 +187,26 @@ public class TaskView extends VerticalLayout {
 
         card.add(title, footer);
 
-        // Make the Card Draggable
         DragSource<TaskCard> dragSource = DragSource.create(card);
         dragSource.setEffectAllowed(com.vaadin.flow.component.dnd.EffectAllowed.MOVE);
-        dragSource.addDragEndListener(e -> lastDroppedCard = null); // Reset security flag
+        dragSource.addDragEndListener(e -> lastDroppedCard = null);
 
-        // Make the Card a Drop Target for exact reordering
         DropTarget<TaskCard> dropTarget = DropTarget.create(card);
         dropTarget.setDropEffect(com.vaadin.flow.component.dnd.DropEffect.MOVE);
         dropTarget.addDropListener(event -> {
             event.getDragSourceComponent().ifPresent(draggedComponent -> {
                 if (draggedComponent instanceof TaskCard draggedCard && draggedCard != card) {
-                    lastDroppedCard = draggedCard; // Flags that the card handled the drop
+                    lastDroppedCard = draggedCard;
 
                     Task draggedTask = draggedCard.getTask();
-                    draggedTask.setCompleted(task.isCompleted());
+                    draggedTask.setBoardColumn(task.getBoardColumn());
 
-                    VerticalLayout targetColumn = task.isCompleted() ? doneColumn : todoColumn;
-                    int targetIndex = targetColumn.indexOf(card);
-
-                    // Insert the dragged card exactly where it was dropped
-                    targetColumn.addComponentAtIndex(targetIndex, draggedCard);
-                    recalculateAndSavePositions();
+                    VerticalLayout targetColumn = (VerticalLayout) card.getParent().orElse(null);
+                    if (targetColumn != null) {
+                        int targetIndex = targetColumn.indexOf(card);
+                        targetColumn.addComponentAtIndex(targetIndex, draggedCard);
+                        recalculateAndSavePositions(task.getBoardColumn(), targetColumn);
+                    }
                 }
             });
         });
@@ -201,29 +214,58 @@ public class TaskView extends VerticalLayout {
         return card;
     }
 
-    // Silently loops through the visible columns, assigns an index value, and saves it to the DB
-    private void recalculateAndSavePositions() {
+    private void recalculateAndSavePositions(BoardColumn col, VerticalLayout columnWrapper) {
         List<Task> updatedTasks = new ArrayList<>();
-
         int index = 0;
-        for (Component c : todoColumn.getChildren().toList()) {
+        for (Component c : columnWrapper.getChildren().toList()) {
             if (c instanceof TaskCard) {
                 Task t = ((TaskCard) c).getTask();
                 t.setPositionIndex(index++);
+                t.setBoardColumn(col);
                 updatedTasks.add(t);
             }
         }
-
-        index = 0;
-        for (Component c : doneColumn.getChildren().toList()) {
-            if (c instanceof TaskCard) {
-                Task t = ((TaskCard) c).getTask();
-                t.setPositionIndex(index++);
-                updatedTasks.add(t);
-            }
-        }
-
         taskService.saveAllTasks(updatedTasks);
+    }
+
+    private void moveColumn(BoardColumn col, int direction) {
+        List<BoardColumn> cols = taskService.getColumnsForCurrentUser();
+        int index = -1;
+        for(int i=0; i<cols.size(); i++){
+            if(cols.get(i).getId().equals(col.getId())) index = i;
+        }
+
+        int newIndex = index + direction;
+        if (newIndex >= 0 && newIndex < cols.size()) {
+            BoardColumn tempCol = cols.remove(index);
+            cols.add(newIndex, tempCol);
+
+            // Reassign the position indices and save
+            for(int i=0; i<cols.size(); i++){
+                cols.get(i).setPositionIndex(i);
+            }
+            taskService.saveAllColumns(cols);
+            refreshBoard();
+        }
+    }
+
+    private void promptNewColumn() {
+        Dialog dialog = new Dialog();
+        TextField colName = new TextField("New Column Name");
+        Button save = new Button("Save", e -> {
+            if (!colName.isEmpty()) {
+                int position = taskService.getColumnsForCurrentUser().size();
+                BoardColumn newCol = new BoardColumn(colName.getValue(), position, null);
+                taskService.saveColumn(newCol);
+                dialog.close();
+                refreshBoard();
+            }
+        });
+        save.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+
+        VerticalLayout layout = new VerticalLayout(colName, save);
+        dialog.add(layout);
+        dialog.open();
     }
 
     private void saveTask() {
@@ -234,8 +276,11 @@ public class TaskView extends VerticalLayout {
             return;
         }
 
+        List<BoardColumn> cols = taskService.getColumnsForCurrentUser();
+        if(cols.isEmpty()) return; // Failsafe
+
         String dateString = datePicker.getValue() != null ? datePicker.getValue().toString() : "";
-        Task newTask = new Task(titleField.getValue(), dateString, priorityBox.getValue(), categoryBox.getValue(), false);
+        Task newTask = new Task(titleField.getValue(), dateString, priorityBox.getValue(), categoryBox.getValue(), cols.get(0));
 
         taskService.saveTask(newTask);
 
@@ -248,24 +293,37 @@ public class TaskView extends VerticalLayout {
     }
 
     private void refreshBoard() {
-        todoColumn.getChildren().filter(component -> component instanceof TaskCard).forEach(todoColumn::remove);
-        doneColumn.getChildren().filter(component -> component instanceof TaskCard).forEach(doneColumn::remove);
+        boardLayout.removeAll();
 
-        List<Task> tasks = taskService.getTasksForCurrentUser();
+        List<BoardColumn> columns = taskService.getColumnsForCurrentUser();
+        List<Task> allTasks = taskService.getTasksForCurrentUser();
 
         if (filterCategory.getValue() != null && !filterCategory.getValue().isEmpty()) {
-            tasks = tasks.stream().filter(t -> filterCategory.getValue().equals(t.getCategory())).collect(Collectors.toList());
+            allTasks = allTasks.stream().filter(t -> filterCategory.getValue().equals(t.getCategory())).collect(Collectors.toList());
         }
-
         if (filterDate.getValue() != null) {
             String filterDateString = filterDate.getValue().toString();
-            tasks = tasks.stream().filter(t -> filterDateString.equals(t.getDueDate())).collect(Collectors.toList());
+            allTasks = allTasks.stream().filter(t -> filterDateString.equals(t.getDueDate())).collect(Collectors.toList());
         }
 
-        for (Task task : tasks) {
-            TaskCard card = createTaskCard(task);
-            if (task.isCompleted()) doneColumn.add(card);
-            else todoColumn.add(card);
+        // Build the dynamic columns
+        for (BoardColumn col : columns) {
+            VerticalLayout columnLayout = createColumnLayout(col);
+
+            List<Task> tasksInCol = allTasks.stream()
+                    .filter(t -> t.getBoardColumn() != null && t.getBoardColumn().getId().equals(col.getId()))
+                    .collect(Collectors.toList());
+
+            for (Task t : tasksInCol) {
+                columnLayout.add(createTaskCard(t));
+            }
+            boardLayout.add(columnLayout);
         }
+
+        // The button to create new columns!
+        Button addColBtn = new Button("+ Add Column", e -> promptNewColumn());
+        addColBtn.setHeight("60px");
+        addColBtn.getStyle().set("margin-top", "16px");
+        boardLayout.add(addColBtn);
     }
 }
