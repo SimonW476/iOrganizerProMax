@@ -22,7 +22,8 @@ public class TaskService {
 
     public List<Task> getTasksForCurrentUser() {
         Optional<ApplicationUser> currentUser = userService.getAuthenticatedUser();
-        return currentUser.map(taskRepository::findByOwner).orElse(Collections.emptyList());
+        // Updated to use the new sorted database query
+        return currentUser.map(taskRepository::findByOwnerOrderByPositionIndexAsc).orElse(Collections.emptyList());
     }
 
     public Task saveTask(Task task) {
@@ -32,6 +33,11 @@ public class TaskService {
             return taskRepository.save(task);
         }
         throw new IllegalStateException("No authenticated user found.");
+    }
+
+    // NEW: Allows us to save the new order of all tasks at once
+    public void saveAllTasks(List<Task> tasks) {
+        taskRepository.saveAll(tasks);
     }
 
     public void deleteTask(Task task) {

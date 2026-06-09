@@ -11,19 +11,23 @@ public class Task {
     private String title;
     private String dueDate;
     private String priority;
+    private String category;
     private boolean completed;
 
-    // This links the task directly to a specific user
+    // NEW: Remembers the exact order of the cards
+    private Integer positionIndex = 0;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "owner_id")
     private ApplicationUser owner;
 
     public Task() {}
 
-    public Task(String title, String dueDate, String priority, boolean completed) {
+    public Task(String title, String dueDate, String priority, String category, boolean completed) {
         this.title = title;
         this.dueDate = dueDate;
         this.priority = priority;
+        this.category = category;
         this.completed = completed;
     }
 
@@ -38,10 +42,15 @@ public class Task {
     public String getPriority() { return priority; }
     public void setPriority(String priority) { this.priority = priority; }
 
+    public String getCategory() { return category; }
+    public void setCategory(String category) { this.category = category; }
+
     public boolean isCompleted() { return completed; }
     public void setCompleted(boolean completed) { this.completed = completed; }
 
-    // New getters and setters for the owner
+    public Integer getPositionIndex() { return positionIndex; }
+    public void setPositionIndex(Integer positionIndex) { this.positionIndex = positionIndex; }
+
     public ApplicationUser getOwner() { return owner; }
     public void setOwner(ApplicationUser owner) { this.owner = owner; }
 }
